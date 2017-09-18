@@ -4,19 +4,45 @@ import sys
 import pickle
 sys.path.append("../tools/")
 
+import operator
+
 from feature_format import featureFormat, targetFeatureSplit
 from tester import dump_classifier_and_data
 from sklearn.feature_selection import (VarianceThreshold, f_classif, SelectKBest)
-from sklearn.grid_search import GridSearchCV
 
 import pandas as pd
 from sklearn.naive_bayes import GaussianNB
 from sklearn import (svm, preprocessing)
-from sklearn.cluster import KMeans
-from sklearn.cross_validation import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split, StratifiedKFold, StratifiedShuffleSplit, GridSearchCV, cross_val_score
 from sklearn.metrics import precision_score, recall_score, accuracy_score
-from numpy import (mean, std)
+import numpy as np
+from sklearn.pipeline import Pipeline
+import matplotlib.pyplot as plt
 
+def plot_grid_search(cv_results, grid_param_1, grid_param_2, name_param_1, name_param_2):
+
+    # Get Test Scores Mean and std for each grid search
+    scores_mean = cv_results['mean_test_score']
+
+    scores_mean = np.array(scores_mean).reshape(len(grid_param_2),len(grid_param_1))
+
+    scores_sd = cv_results['std_test_score']
+    scores_sd = np.array(scores_sd).reshape(len(grid_param_2),len(grid_param_1))
+
+    # Plot Grid search scores
+    _, ax = plt.subplots(1,1)
+
+    # Param1 is the X-axis, Param 2 is represented as a different curve (color line)
+    for idx, val in enumerate(grid_param_2):
+	ax.plot(grid_param_1, scores_mean[idx,:], '-o', label= name_param_2 + ': ' + str(val))
+
+	ax.set_title("Grid Search Scores", fontsize=20, fontweight='bold')
+	ax.set_xlabel(name_param_1, fontsize=16)
+	ax.set_ylabel('CV Average F1 Score', fontsize=16)
+	ax.legend(loc="best", fontsize=15)
+	ax.grid('on')
+    #plt.show()
 
 ### Task 1: Select what features you'll use.
 ### features_list is a list of strings, each of which is a feature name.
@@ -64,31 +90,16 @@ new_features_list = features_list + ['fraction_to_poi', 'fraction_from_poi']
 data = featureFormat(my_dataset, new_features_list, sort_keys = True)
 
 labels, features = targetFeatureSplit(data)
+print "labels"
+print labels
 
-sel = VarianceThreshold(threshold=(.8 * .2))
-features = sel.fit_transform(features)
-
-k = 6
-selector = SelectKBest(f_classif, k=k)
-selector.fit_transform(features, labels)
-print "Best features"
-
-scores = zip(new_features_list[1:],selector.scores_)
-sorted_scores = sorted(scores, key = lambda x: x[1], reverse=True)
-print sorted_scores
-
-optimized_features_list = POI_label + list(map(lambda x: x[0], sorted_scores))[0:k]
-print optimized_features_list
-
-features_list = optimized_features_list
-
+'''
+optimized_features_list = features_list
 data = featureFormat(my_dataset, optimized_features_list, sort_keys = True)
+'''
 labels, features = targetFeatureSplit(data)
 scaler = preprocessing.MinMaxScaler()
 features = scaler.fit_transform(features)
-
-features_train, features_test, labels_train, labels_test = train_test_split(features, labels, test_size=0.3, random_state=42)
-
 
 ### Task 4: Try a varity of classifiers
 ### Please name your classifier clf for easy export below.
@@ -98,42 +109,59 @@ features_train, features_test, labels_train, labels_test = train_test_split(feat
 
 # Provided to give you a starting point. Try a variety of classifiers.
 
-models = {'GaussianNB': GaussianNB(),
-	  'KMeans': KMeans(),
-	  'SVC': svm.SVC()}
+cv = StratifiedShuffleSplit(n_splits=5, test_size=0.4, random_state=15)
+sss = StratifiedShuffleSplit(n_splits=3, test_size=0.2, random_state=16) 
 
-parameters = {'GaussianNB': {},
-	      'KMeans': {'n_clusters': [1, 2, 3, 4, 5], 'tol': [1, 0.1, 0.01, 0.001, 0.0001],'random_state': [42]},
-	      'SVC': {'kernel': ['rbf', 'linear', 'poly'], 'C': [0.1, 1, 10, 100, 1000], 'gamma': [1, 0.1, 0.01, 0.001], 'random_state': [42]}
+models = {'LogisticRegression', 'SVC', 'GaussianNB'}
+
+parameters = {'LogisticRegression': {'LogisticRegression__C':[1e7,1e8,1e9], 'kbest__k':range(1,20)},
+	      'SVC': {'SVC__C': [0.1, 1, 10, 100, 1000],'kbest__k':range(1,20)},
+	      'GaussianNB': {'kbest__k':range(1,20)},
 	      }
 
+pipes = {'SVC': Pipeline(steps=[('kbest',SelectKBest()),('SVC',svm.SVC(kernel='poly', gamma=1))]),
+	 'GaussianNB': Pipeline(steps=[('kbest',SelectKBest()),('Gaussian NB',GaussianNB())]), 'LogisticRegression': Pipeline(steps=[('kbest',SelectKBest()),('LogisticRegression',LogisticRegression(tol=1e-6))])}
+
+params_chosen = {}
 for m in models:
     
     print m
-    model = models[m]
+    params_chosen[m] = []
     params = parameters[m]
-    grid_search = GridSearchCV(model, params)
+    pipe = pipes[m]
 
-    grid_search.fit(features_train, labels_train)
-    predictions = grid_search.predict(features_test)
+    grid_search = GridSearchCV(pipe, params, cv=cv, scoring='f1').fit(features, labels)
+    print("Average CV accuracy: {}".format(np.mean(cross_val_score(grid_search, features, labels, cv=sss, scoring='accuracy'))))
+    print("Average CV precision: {}".format(np.mean(cross_val_score(grid_search, features, labels, cv=sss, scoring='precision'))))
+    print("Average CV recall: {}".format(np.mean(cross_val_score(grid_search, features, labels, cv=sss, scoring='recall'))))
 
-
-    print "accuracy: {}".format(accuracy_score(labels_test, predictions))
-    try:
-	print "precision: {}".format(precision_score(labels_test, predictions))
-	print "recall: {}".format(recall_score(labels_test, predictions))
-    except ValueError:
-	print 'precision: 0.0'
-	print 'recall: 0.0'
-
-    best_params = grid_search.best_estimator_.get_params()
+    if m=='LogisticRegression':
+	plot_grid_search(grid_search.cv_results_, range(1,20), [1e7,1e8,1e9],'k','LogisticRegression__C')
+    elif m=='SVC':
+	plot_grid_search(grid_search.cv_results_, range(1,20), [0.1, 1, 10, 100, 1000],'k','SVC__C')
+    else:
+	plot_grid_search(grid_search.cv_results_, range(1,20), ['no params'],'k','GaussianNB')
 
     print 'best_params'
+    best_params = grid_search.best_estimator_.get_params()
+    best_params = grid_search.best_params_
+    print best_params
+    kbest = best_params['kbest__k']
+    selector = grid_search.best_estimator_#.steps[0][1]
+    select_indices = selector.named_steps['kbest'].scores_
+    for i in sorted(zip(select_indices, features_list[1:]),key=operator.itemgetter(0),reverse=True)[:kbest]:
+	print i
+	params_chosen[m].append(i[1])
+
+
+
     for param_name in params.keys():
 	print "{} = {}, ".format(param_name, best_params[param_name])
     print '\n'
 
 clf = GaussianNB()
+features_list = params_chosen['GaussianNB']
+features_list = ['poi'] + features_list
 
 ### using our testing script. Check the tester.py script in the final project
 ### folder for details on the evaluation method, especially the test_classifier
