@@ -14,4 +14,6 @@ generally number of emails messages; notable exception is ‘email_address’, w
 text string)
 c. POI label: [‘poi’] (boolean, represented as integer)
 
+The report for the project is at `enron_report.pdf`.
+
 This project is part of the Udacity Data Analyst Nanodegree.
